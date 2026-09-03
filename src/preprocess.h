@@ -2,7 +2,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 #include <sensor_msgs/msg/point_cloud2.hpp>
-#include <livox_ros_driver2/msg/custom_msg.hpp>
+// #include <livox_ros_driver2/msg/custom_msg.hpp>
 
 using namespace std;
 
@@ -139,8 +139,8 @@ class Preprocess
 
   Preprocess();
   ~Preprocess();
-  
-  void process(const livox_ros_driver2::msg::CustomMsg::UniquePtr &msg, PointCloudXYZI::Ptr &pcl_out);
+
+  // void process(const livox_ros_driver2::msg::CustomMsg::UniquePtr &msg, PointCloudXYZI::Ptr &pcl_out);
   void process(const sensor_msgs::msg::PointCloud2::UniquePtr &msg, PointCloudXYZI::Ptr &pcl_out);
   void set(bool feat_en, int lid_type, double bld, int pfilt_num);
 
@@ -155,7 +155,7 @@ class Preprocess
   // ros::Publisher pub_full, pub_surf, pub_corn;
 
 private:
-  void avia_handler(const livox_ros_driver2::msg::CustomMsg::UniquePtr &msg);
+  // void avia_handler(const livox_ros_driver2::msg::CustomMsg::UniquePtr &msg);
   void oust64_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg);
   void velodyne_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg);
   void mid360_handler(const sensor_msgs::msg::PointCloud2::UniquePtr &msg);
@@ -165,7 +165,7 @@ private:
   int  plane_judge(const PointCloudXYZI &pl, vector<orgtype> &types, uint i, uint &i_nex, Eigen::Vector3d &curr_direct);
   bool small_plane(const PointCloudXYZI &pl, vector<orgtype> &types, uint i_cur, uint &i_nex, Eigen::Vector3d &curr_direct);
   bool edge_jump_judge(const PointCloudXYZI &pl, vector<orgtype> &types, uint i, Surround nor_dir);
-  
+
   int group_size;
   double disA, disB, inf_bound;
   double limit_maxmid, limit_midmin, limit_maxmin;
