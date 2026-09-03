@@ -32,6 +32,9 @@
 // CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
+
+// clang-format off
+
 #include <omp.h>
 #include <mutex>
 #include <math.h>
@@ -62,6 +65,8 @@
 // #include <livox_ros_driver2/msg/custom_msg.hpp>
 #include "preprocess.h"
 #include <ikd-Tree/ikd_Tree.h>
+
+#include "laserMapping.hpp"
 
 #define INIT_TIME           (0.1)
 #define LASER_POINT_COV     (0.001)
@@ -1200,3 +1205,217 @@ int main(int argc, char** argv)
     return 0;
 }
 #endif
+
+// clang-format on
+
+FastLioCore::FastLioCore(const FastLioConfig& config, std::function<void(const nav_msgs::msg::Odometry&)> odom_cb)
+  : odom_cb_(odom_cb)
+{
+  filter_size_corner_min = config.filter_size_corner_min;
+  filter_size_surf_min = config.filter_size_surf_min;
+  filter_size_map_min = config.filter_size_map_min;
+  cube_len = config.cube_len;
+  DET_RANGE = config.det_range;
+  fov_deg = config.fov_deg;
+  gyr_cov = config.gyr_cov;
+  acc_cov = config.acc_cov;
+  b_gyr_cov = config.b_gyr_cov;
+  b_acc_cov = config.b_acc_cov;
+  extrinsic_est_en = config.extrinsic_est_en;
+  extrinT = config.extrinT;
+  extrinR = config.extrinR;
+  NUM_MAX_ITERATIONS = config.max_iteration;
+
+  FOV_DEG = (fov_deg + 10.0) > 179.9 ? 179.9 : (fov_deg + 10.0);
+  HALF_FOV_COS = cos((FOV_DEG) * 0.5 * PI_M / 180.0);
+
+  _featsArray.reset(new PointCloudXYZI());
+
+  memset(point_selected_surf, true, sizeof(point_selected_surf));
+  memset(res_last, -1000.0f, sizeof(res_last));
+  downSizeFilterSurf.setLeafSize(filter_size_surf_min, filter_size_surf_min, filter_size_surf_min);
+  downSizeFilterMap.setLeafSize(filter_size_map_min, filter_size_map_min, filter_size_map_min);
+  memset(point_selected_surf, true, sizeof(point_selected_surf));
+  memset(res_last, -1000.0f, sizeof(res_last));
+
+  Lidar_T_wrt_IMU << VEC_FROM_ARRAY(extrinT);
+  Lidar_R_wrt_IMU << MAT_FROM_ARRAY(extrinR);
+  p_imu->set_extrinsic(Lidar_T_wrt_IMU, Lidar_R_wrt_IMU);
+  p_imu->set_gyr_cov(V3D(gyr_cov, gyr_cov, gyr_cov));
+  p_imu->set_acc_cov(V3D(acc_cov, acc_cov, acc_cov));
+  p_imu->set_gyr_bias_cov(V3D(b_gyr_cov, b_gyr_cov, b_gyr_cov));
+  p_imu->set_acc_bias_cov(V3D(b_acc_cov, b_acc_cov, b_acc_cov));
+
+  double epsi[23];
+  std::fill(epsi, epsi + 23, 0.001);
+  kf.init_dyn_share(get_f, df_dx, df_dw, h_share_model, NUM_MAX_ITERATIONS, epsi);
+
+  path_en = false;
+  scan_pub_en = false;
+  scan_body_pub_en = false;
+}
+
+FastLioCore::~FastLioCore()
+{
+}
+
+void FastLioCore::addPointCloud(const pcl::PointCloud<PointXYZIRT>::Ptr& msg, double time)
+{
+  mtx_buffer.lock();
+  scan_count++;
+  double cur_time = time;
+
+  if (!is_first_lidar && cur_time < last_timestamp_lidar) {
+    std::cerr << "lidar loop back, clear buffer" << std::endl;
+    lidar_buffer.clear();
+  }
+  if (is_first_lidar) {
+    is_first_lidar = false;
+  }
+
+  PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
+  // Convert PointXYZIRT to PointType (PointXYZINormal for fast-lio)
+  ptr->reserve(msg->size());
+  for (const auto& p : msg->points) {
+    // Blind filter is handled externally or we can add it here
+    double range = p.x * p.x + p.y * p.y + p.z * p.z;
+    if (range < (0.01 * 0.01)) {
+      continue;  // 0.01 is default blind
+    }
+    PointType pt;
+    pt.x = p.x;
+    pt.y = p.y;
+    pt.z = p.z;
+    pt.intensity = p.intensity;
+    pt.curvature = p.time * 1e-3;  // time is relative microsec, convert to millisec for FAST-LIO
+    pt.normal_x = 0;
+    pt.normal_y = 0;
+    pt.normal_z = 0;
+    ptr->push_back(pt);
+  }
+
+  lidar_buffer.push_back(ptr);
+  time_buffer.push_back(cur_time);
+  last_timestamp_lidar = cur_time;
+
+  // キューのサイズを制限して常に最新の点群のみを保持する（OOM対策）
+  while (lidar_buffer.size() > 2) {
+    lidar_buffer.pop_front();
+    time_buffer.pop_front();
+  }
+
+  mtx_buffer.unlock();
+}
+
+void FastLioCore::addImuData(const sensor_msgs::msg::Imu::SharedPtr& msg)
+{
+  publish_count++;
+  double timestamp = get_time_sec(msg->header.stamp);
+
+  mtx_buffer.lock();
+  if (timestamp < last_timestamp_imu) {
+    std::cerr << "imu loop back, clear buffer" << std::endl;
+    imu_buffer.clear();
+  }
+
+  last_timestamp_imu = timestamp;
+  imu_buffer.push_back(msg);
+  mtx_buffer.unlock();
+}
+
+void FastLioCore::process()
+{
+  if (sync_packages(Measures)) {
+    if (flg_first_scan) {
+      first_lidar_time = Measures.lidar_beg_time;
+      p_imu->first_lidar_time = first_lidar_time;
+      flg_first_scan = false;
+      return;
+    }
+
+    double match_start, solve_start;
+    match_time = 0;
+    kdtree_search_time = 0.0;
+    solve_time = 0;
+    solve_const_H_time = 0;
+
+    p_imu->Process(Measures, kf, feats_undistort);
+    state_point = kf.get_x();
+    pos_lid = state_point.pos + state_point.rot * state_point.offset_T_L_I;
+
+    if (feats_undistort->empty() || (feats_undistort == NULL)) {
+      return;
+    }
+
+    flg_EKF_inited = (Measures.lidar_beg_time - first_lidar_time) < INIT_TIME ? false : true;
+    lasermap_fov_segment();
+
+    downSizeFilterSurf.setInputCloud(feats_undistort);
+    downSizeFilterSurf.filter(*feats_down_body);
+    feats_down_size = feats_down_body->points.size();
+
+    if (ikdtree.Root_Node == nullptr) {
+      if (feats_down_size > 5) {
+        ikdtree.set_downsample_param(filter_size_map_min);
+        feats_down_world->resize(feats_down_size);
+        for (int i = 0; i < feats_down_size; i++) {
+          pointBodyToWorld(&(feats_down_body->points[i]), &(feats_down_world->points[i]));
+        }
+        ikdtree.Build(feats_down_world->points);
+      }
+      return;
+    }
+
+    kdtree_size_st = ikdtree.size();
+
+    if (feats_down_size < 5) {
+      return;
+    }
+
+    normvec->resize(feats_down_size);
+    feats_down_world->resize(feats_down_size);
+
+    pointSearchInd_surf.resize(feats_down_size);
+    Nearest_Points.resize(feats_down_size);
+
+    double solve_H_time = 0;
+    kf.update_iterated_dyn_share_modified(LASER_POINT_COV, solve_H_time);
+    state_point = kf.get_x();
+    euler_cur = SO3ToEuler(state_point.rot);
+    pos_lid = state_point.pos + state_point.rot * state_point.offset_T_L_I;
+    geoQuat.x = state_point.rot.coeffs()[0];
+    geoQuat.y = state_point.rot.coeffs()[1];
+    geoQuat.z = state_point.rot.coeffs()[2];
+    geoQuat.w = state_point.rot.coeffs()[3];
+
+    // Callback with Odometry
+    if (odom_cb_) {
+      nav_msgs::msg::Odometry odomAftMapped;
+      odomAftMapped.header.frame_id = "camera_init";
+      odomAftMapped.child_frame_id = "body";
+      odomAftMapped.header.stamp = get_ros_time(lidar_end_time);
+
+      odomAftMapped.pose.pose.position.x = state_point.pos(0);
+      odomAftMapped.pose.pose.position.y = state_point.pos(1);
+      odomAftMapped.pose.pose.position.z = state_point.pos(2);
+      odomAftMapped.pose.pose.orientation.x = geoQuat.x;
+      odomAftMapped.pose.pose.orientation.y = geoQuat.y;
+      odomAftMapped.pose.pose.orientation.z = geoQuat.z;
+      odomAftMapped.pose.pose.orientation.w = geoQuat.w;
+
+      auto P = kf.get_P();
+      for (int i = 0; i < 6; i++) {
+        int k = i < 3 ? i + 3 : i - 3;
+        odomAftMapped.pose.covariance[i * 6 + 0] = P(k, 3);
+        odomAftMapped.pose.covariance[i * 6 + 1] = P(k, 4);
+        odomAftMapped.pose.covariance[i * 6 + 2] = P(k, 5);
+        odomAftMapped.pose.covariance[i * 6 + 3] = P(k, 0);
+        odomAftMapped.pose.covariance[i * 6 + 4] = P(k, 1);
+        odomAftMapped.pose.covariance[i * 6 + 5] = P(k, 2);
+      }
+      odom_cb_(odomAftMapped);
+    }
+
+    map_incremental();
+  }
+}
