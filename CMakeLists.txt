@@ -118,7 +118,9 @@ ament_target_dependencies(fastlio_mapping ${dependencies})
 # ---------------- Install --------------- #
 install(TARGETS fastlio_mapping
   EXPORT ${PROJECT_NAME}
-  DESTINATION lib/${PROJECT_NAME}
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
 install(
