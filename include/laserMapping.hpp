@@ -44,7 +44,16 @@ public:
   void addPointCloud(const pcl::PointCloud<PointXYZIRT>::ConstPtr& cloud, double cur_time);
   void addImuData(const sensor_msgs::msg::Imu::ConstSharedPtr& msg);
 
-  /* Should be called periodically to process the buffers and trigger `odom_cb`. */
+  /**
+   * 定期的に呼び出し，終了時刻までの IMU データが揃った LiDAR スキャンをバッファから 1 件処理する．
+   * 推定結果が得られた場合は `odom_cb` を呼び出す．
+   *
+   * IMU サンプルはバッファに蓄積し，タイムスタンプの差を使って順に積分する．
+   * IMU が 200 Hz，本関数の呼び出しが 100 Hz でも，それ自体によって IMU データが破棄・間引きされることはなく，
+   * 各スキャンに対応するサンプルをまとめて処理する．
+   * 呼び出し周期は処理遅延に影響するが，IMU の積分の時間刻みには影響しない．
+   * 推定処理は LiDAR と IMU の同期完了を待つため，呼び出し頻度を上げるだけではIMU 周期のオドメトリ出力にはならない．
+   */
   void process();
 
 private:
