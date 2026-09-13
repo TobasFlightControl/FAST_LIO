@@ -1251,10 +1251,6 @@ FastLioCore::FastLioCore(const FastLioConfig& config, function<void(const nav_ms
   kf.init_dyn_share(get_f, df_dx, df_dw, h_share_model, NUM_MAX_ITERATIONS, epsi);
 }
 
-FastLioCore::~FastLioCore()
-{
-}
-
 void FastLioCore::addPointCloud(const pcl::PointCloud<PointXYZIRT>::ConstPtr& msg, double cur_time)
 {
   mtx_buffer.lock();
@@ -1274,7 +1270,7 @@ void FastLioCore::addPointCloud(const pcl::PointCloud<PointXYZIRT>::ConstPtr& ms
   ptr->reserve(msg->size());
   for (const auto& p : msg->points) {
     // 距離が近すぎる点を除外
-    constexpr double kDefaultBlindThresh = 0.01;  // [m]
+    constexpr float kDefaultBlindThresh = 0.01f;  // [m]
     const auto range = p.x * p.x + p.y * p.y + p.z * p.z;
     if (range < kDefaultBlindThresh * kDefaultBlindThresh) {
       continue;
@@ -1308,7 +1304,7 @@ void FastLioCore::addPointCloud(const pcl::PointCloud<PointXYZIRT>::ConstPtr& ms
 void FastLioCore::addImuData(const sensor_msgs::msg::Imu::ConstSharedPtr& msg)
 {
   publish_count++;
-  double timestamp = get_time_sec(msg->header.stamp);
+  const auto timestamp = get_time_sec(msg->header.stamp);
 
   mtx_buffer.lock();
 
