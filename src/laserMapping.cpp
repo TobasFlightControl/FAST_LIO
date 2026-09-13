@@ -1259,7 +1259,7 @@ FastLioCore::~FastLioCore()
 {
 }
 
-void FastLioCore::addPointCloud(const pcl::PointCloud<PointXYZIRT>::Ptr& msg, double time)
+void FastLioCore::addPointCloud(const pcl::PointCloud<PointXYZIRT>::ConstPtr& msg, double time)
 {
   mtx_buffer.lock();
   scan_count++;
@@ -1307,7 +1307,7 @@ void FastLioCore::addPointCloud(const pcl::PointCloud<PointXYZIRT>::Ptr& msg, do
   mtx_buffer.unlock();
 }
 
-void FastLioCore::addImuData(const sensor_msgs::msg::Imu::SharedPtr& msg)
+void FastLioCore::addImuData(const sensor_msgs::msg::Imu::ConstSharedPtr& msg)
 {
   publish_count++;
   double timestamp = get_time_sec(msg->header.stamp);
