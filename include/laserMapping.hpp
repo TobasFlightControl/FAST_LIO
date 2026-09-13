@@ -42,7 +42,7 @@ public:
   explicit FastLioCore(const FastLioConfig& config, std::function<void(const nav_msgs::msg::Odometry&)> odom_cb);
   ~FastLioCore();
 
-  void addPointCloud(const pcl::PointCloud<PointXYZIRT>::ConstPtr& cloud, double time);
+  void addPointCloud(const pcl::PointCloud<PointXYZIRT>::ConstPtr& cloud, double cur_time);
   void addImuData(const sensor_msgs::msg::Imu::ConstSharedPtr& msg);
 
   /* Should be called periodically to process the buffers and trigger `odom_cb`. */

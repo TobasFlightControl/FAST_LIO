@@ -1208,7 +1208,7 @@ int main(int argc, char** argv)
 
 // clang-format on
 
-FastLioCore::FastLioCore(const FastLioConfig& config, std::function<void(const nav_msgs::msg::Odometry&)> odom_cb)
+FastLioCore::FastLioCore(const FastLioConfig& config, function<void(const nav_msgs::msg::Odometry&)> odom_cb)
   : odom_cb_(odom_cb)
 {
   filter_size_corner_min = config.filter_size_corner_min;
@@ -1247,47 +1247,45 @@ FastLioCore::FastLioCore(const FastLioConfig& config, std::function<void(const n
   p_imu->set_acc_bias_cov(V3D(b_acc_cov, b_acc_cov, b_acc_cov));
 
   double epsi[23];
-  std::fill(epsi, epsi + 23, 0.001);
+  fill(epsi, epsi + 23, 0.001);
   kf.init_dyn_share(get_f, df_dx, df_dw, h_share_model, NUM_MAX_ITERATIONS, epsi);
-
-  path_en = false;
-  scan_pub_en = false;
-  scan_body_pub_en = false;
 }
 
 FastLioCore::~FastLioCore()
 {
 }
 
-void FastLioCore::addPointCloud(const pcl::PointCloud<PointXYZIRT>::ConstPtr& msg, double time)
+void FastLioCore::addPointCloud(const pcl::PointCloud<PointXYZIRT>::ConstPtr& msg, double cur_time)
 {
   mtx_buffer.lock();
   scan_count++;
-  double cur_time = time;
 
   if (!is_first_lidar && cur_time < last_timestamp_lidar) {
-    std::cerr << "lidar loop back, clear buffer" << std::endl;
+    cerr << "lidar loop back, clear buffer" << endl;
     lidar_buffer.clear();
   }
   if (is_first_lidar) {
     is_first_lidar = false;
   }
 
-  PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
-  // Convert PointXYZIRT to PointType (PointXYZINormal for fast-lio)
+  const auto ptr = std::make_shared<PointCloudXYZI>();
+
+  // PointXYZIRT を FAST-LIO の PointXYZINormal に変換する
   ptr->reserve(msg->size());
   for (const auto& p : msg->points) {
-    // Blind filter is handled externally or we can add it here
-    double range = p.x * p.x + p.y * p.y + p.z * p.z;
-    if (range < (0.01 * 0.01)) {
-      continue;  // 0.01 is default blind
+    // 距離が近すぎる点を除外
+    constexpr double kDefaultBlindThresh = 0.01;  // [m]
+    const auto range = p.x * p.x + p.y * p.y + p.z * p.z;
+    if (range < kDefaultBlindThresh * kDefaultBlindThresh) {
+      continue;
     }
+
     PointType pt;
     pt.x = p.x;
     pt.y = p.y;
     pt.z = p.z;
     pt.intensity = p.intensity;
-    pt.curvature = p.time * 1e-3;  // time is relative microsec, convert to millisec for FAST-LIO
+    pt.curvature = p.time * 1e-3;  // us -> ms
     pt.normal_x = 0;
     pt.normal_y = 0;
     pt.normal_z = 0;
@@ -1313,13 +1311,15 @@ void FastLioCore::addImuData(const sensor_msgs::msg::Imu::ConstSharedPtr& msg)
   double timestamp = get_time_sec(msg->header.stamp);
 
   mtx_buffer.lock();
+
   if (timestamp < last_timestamp_imu) {
-    std::cerr << "imu loop back, clear buffer" << std::endl;
+    cerr << "imu loop back, clear buffer" << endl;
     imu_buffer.clear();
   }
 
   last_timestamp_imu = timestamp;
   imu_buffer.push_back(msg);
+
   mtx_buffer.unlock();
 }
 
@@ -1333,27 +1333,31 @@ void FastLioCore::process()
       return;
     }
 
-    double match_start, solve_start;
-    match_time = 0;
+    match_time = 0.0;
     kdtree_search_time = 0.0;
-    solve_time = 0;
-    solve_const_H_time = 0;
+    solve_time = 0.0;
+    solve_const_H_time = 0.0;
 
     p_imu->Process(Measures, kf, feats_undistort);
     state_point = kf.get_x();
     pos_lid = state_point.pos + state_point.rot * state_point.offset_T_L_I;
 
     if (feats_undistort->empty() || (feats_undistort == NULL)) {
+      cerr << "No point, skip this scan!" << endl;
       return;
     }
 
     flg_EKF_inited = (Measures.lidar_beg_time - first_lidar_time) < INIT_TIME ? false : true;
+
+    /* Segment the map in lidar FOV */
     lasermap_fov_segment();
 
+    /* Downsample the feature points in a scan */
     downSizeFilterSurf.setInputCloud(feats_undistort);
     downSizeFilterSurf.filter(*feats_down_body);
     feats_down_size = feats_down_body->points.size();
 
+    /* Initialize the map kdtree */
     if (ikdtree.Root_Node == nullptr) {
       if (feats_down_size > 5) {
         ikdtree.set_downsample_param(filter_size_map_min);
@@ -1368,7 +1372,9 @@ void FastLioCore::process()
 
     kdtree_size_st = ikdtree.size();
 
+    /* ICP and iterated Kalman filter update */
     if (feats_down_size < 5) {
+      cerr << "No point, skip this scan!" << endl;
       return;
     }
 
@@ -1378,7 +1384,8 @@ void FastLioCore::process()
     pointSearchInd_surf.resize(feats_down_size);
     Nearest_Points.resize(feats_down_size);
 
-    double solve_H_time = 0;
+    /* Iterated state estimation */
+    double solve_H_time = 0.0;
     kf.update_iterated_dyn_share_modified(LASER_POINT_COV, solve_H_time);
     state_point = kf.get_x();
     euler_cur = SO3ToEuler(state_point.rot);
@@ -1388,7 +1395,7 @@ void FastLioCore::process()
     geoQuat.z = state_point.rot.coeffs()[2];
     geoQuat.w = state_point.rot.coeffs()[3];
 
-    // Callback with Odometry
+    /* Callback with the odometry after mapped */
     if (odom_cb_) {
       nav_msgs::msg::Odometry odomAftMapped;
       odomAftMapped.header.frame_id = "camera_init";
@@ -1403,9 +1410,9 @@ void FastLioCore::process()
       odomAftMapped.pose.pose.orientation.z = geoQuat.z;
       odomAftMapped.pose.pose.orientation.w = geoQuat.w;
 
-      auto P = kf.get_P();
+      const auto P = kf.get_P();
       for (int i = 0; i < 6; i++) {
-        int k = i < 3 ? i + 3 : i - 3;
+        const auto k = i < 3 ? i + 3 : i - 3;
         odomAftMapped.pose.covariance[i * 6 + 0] = P(k, 3);
         odomAftMapped.pose.covariance[i * 6 + 1] = P(k, 4);
         odomAftMapped.pose.covariance[i * 6 + 2] = P(k, 5);
@@ -1413,6 +1420,7 @@ void FastLioCore::process()
         odomAftMapped.pose.covariance[i * 6 + 4] = P(k, 1);
         odomAftMapped.pose.covariance[i * 6 + 5] = P(k, 2);
       }
+
       odom_cb_(odomAftMapped);
     }
 
