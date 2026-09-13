@@ -1266,7 +1266,7 @@ void FastLioCore::addPointCloud(const pcl::PointCloud<PointXYZIRT>::ConstPtr& ms
 
   const auto ptr = std::make_shared<PointCloudXYZI>();
 
-  // PointXYZIRT を FAST-LIO の PointXYZINormal に変換する
+  // PointXYZIRT を FAST-LIO の PointXYZINormal に変換
   ptr->reserve(msg->size());
   for (const auto& p : msg->points) {
     // 距離が近すぎる点を除外
@@ -1292,8 +1292,10 @@ void FastLioCore::addPointCloud(const pcl::PointCloud<PointXYZIRT>::ConstPtr& ms
   time_buffer.push_back(cur_time);
   last_timestamp_lidar = cur_time;
 
-  // キューのサイズを制限して常に最新の点群のみを保持する（OOM対策）
-  while (lidar_buffer.size() > 2) {
+  // メモリ不足対策のためキューサイズを制限
+  constexpr size_t kMaxBufferSize = 2;
+  while (lidar_buffer.size() > kMaxBufferSize) {
+    cerr << "LiDAR buffer exceeded the limit of " << kMaxBufferSize << " scans. Dropping the oldest scan." << endl;
     lidar_buffer.pop_front();
     time_buffer.pop_front();
   }
