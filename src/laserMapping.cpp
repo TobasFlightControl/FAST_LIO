@@ -148,6 +148,7 @@ geometry_msgs::msg::PoseStamped msg_body_pose;
 shared_ptr<Preprocess> p_pre(new Preprocess());
 shared_ptr<ImuProcess> p_imu(new ImuProcess());
 
+#if false
 void SigHandle(int sig)
 {
     flg_exit = true;
@@ -182,7 +183,7 @@ void pointBodyToWorld_ikfom(PointType const * const pi, PointType * const po, st
     po->z = p_global(2);
     po->intensity = pi->intensity;
 }
-
+#endif
 
 void pointBodyToWorld(PointType const * const pi, PointType * const po)
 {
@@ -206,6 +207,7 @@ void pointBodyToWorld(const Matrix<T, 3, 1> &pi, Matrix<T, 3, 1> &po)
     po[2] = p_global(2);
 }
 
+#if false
 void RGBpointBodyToWorld(PointType const * const pi, PointType * const po)
 {
     V3D p_body(pi->x, pi->y, pi->z);
@@ -227,6 +229,7 @@ void RGBpointBodyLidarToIMU(PointType const * const pi, PointType * const po)
     po->z = p_body_imu(2);
     po->intensity = pi->intensity;
 }
+#endif
 
 void points_cache_collect()
 {
@@ -285,6 +288,7 @@ void lasermap_fov_segment()
     kdtree_delete_time = omp_get_wtime() - delete_begin;
 }
 
+#if false
 void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::UniquePtr msg)
 {
     mtx_buffer.lock();
@@ -313,7 +317,6 @@ void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::UniquePtr msg)
 
 double timediff_lidar_wrt_imu = 0.0;
 bool   timediff_set_flg = false;
-#if false
 void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::UniquePtr msg)
 {
     mtx_buffer.lock();
@@ -352,7 +355,6 @@ void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::UniquePtr msg)
     mtx_buffer.unlock();
     sig_buffer.notify_all();
 }
-#endif
 
 void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in)
 {
@@ -384,6 +386,7 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in)
     mtx_buffer.unlock();
     sig_buffer.notify_all();
 }
+#endif
 
 double lidar_mean_scantime = 0.0;
 int    scan_num = 0;
@@ -491,6 +494,7 @@ void map_incremental()
     kdtree_incremental_time = omp_get_wtime() - st_time;
 }
 
+#if false
 PointCloudXYZI::Ptr pcl_wait_pub(new PointCloudXYZI());
 PointCloudXYZI::Ptr pcl_wait_save(new PointCloudXYZI());
 void publish_frame_world(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubLaserCloudFull)
@@ -680,6 +684,7 @@ void publish_path(rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pubPath)
         pubPath->publish(path);
     }
 }
+#endif
 
 void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_data)
 {
@@ -1211,6 +1216,10 @@ int main(int argc, char** argv)
 FastLioCore::FastLioCore(const FastLioConfig& config, function<void(const nav_msgs::msg::Odometry&)> odom_cb)
   : odom_cb_(odom_cb)
 {
+  assert(config.cube_len > 2 * MOV_THRESHOLD * config.det_range);
+
+  // 与えられた設定を反映
+  NUM_MAX_ITERATIONS = config.max_iteration;
   filter_size_corner_min = config.filter_size_corner_min;
   filter_size_surf_min = config.filter_size_surf_min;
   filter_size_map_min = config.filter_size_map_min;
@@ -1221,10 +1230,9 @@ FastLioCore::FastLioCore(const FastLioConfig& config, function<void(const nav_ms
   acc_cov = config.acc_cov;
   b_gyr_cov = config.b_gyr_cov;
   b_acc_cov = config.b_acc_cov;
-  extrinsic_est_en = config.extrinsic_est_en;
+  blind_ = config.blind;
   extrinT = config.extrinT;
   extrinR = config.extrinR;
-  NUM_MAX_ITERATIONS = config.max_iteration;
 
   FOV_DEG = (fov_deg + 10.0) > 179.9 ? 179.9 : (fov_deg + 10.0);
   HALF_FOV_COS = cos((FOV_DEG) * 0.5 * PI_M / 180.0);
@@ -1270,9 +1278,8 @@ void FastLioCore::addPointCloud(const pcl::PointCloud<PointXYZIRT>::ConstPtr& ms
   ptr->reserve(msg->size());
   for (const auto& p : msg->points) {
     // 距離が近すぎる点を除外
-    constexpr float kDefaultBlindThresh = 0.01f;  // [m]
     const auto range = p.x * p.x + p.y * p.y + p.z * p.z;
-    if (range < kDefaultBlindThresh * kDefaultBlindThresh) {
+    if (range < blind_ * blind_) {
       continue;
     }
 

@@ -20,6 +20,7 @@ struct PointXYZIRT
 
 struct FastLioConfig
 {
+  int max_iteration = 4;
   double filter_size_corner_min = 0.5;
   double filter_size_surf_min = 0.5;
   double filter_size_map_min = 0.5;
@@ -30,12 +31,12 @@ struct FastLioConfig
   double acc_cov = 0.1;
   double b_gyr_cov = 0.0001;
   double b_acc_cov = 0.0001;
-  bool extrinsic_est_en = true;
+  double blind = 0.01;
   std::vector<double> extrinT = { 0, 0, 0 };
   std::vector<double> extrinR = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
-  int max_iteration = 4;
 };
 
+/* FAST-LIO のコア部分を ROS に依存しないように取り出したクラス． */
 class FastLioCore
 {
 public:
@@ -57,7 +58,10 @@ public:
   void process();
 
 private:
-  std::function<void(const nav_msgs::msg::Odometry&)> odom_cb_;
+  const std::function<void(const nav_msgs::msg::Odometry&)> odom_cb_;
+
+  // Config
+  double blind_;
 };
 
 POINT_CLOUD_REGISTER_POINT_STRUCT(
